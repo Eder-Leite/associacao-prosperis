@@ -1,0 +1,1062 @@
+unit reservaU;
+
+interface
+
+uses
+  geralU, StrUtils, SysUtils, DB, DateUtils, Forms, Windows, RDprint,
+  IdBaseComponent, IdComponent, IdTCPConnection, IdTCPClient, IdMessage,
+  IdExplicitTLSClientServerBase, IdMessageClient, IdSMTPBase, IdSMTP,
+  IdIOHandler, IdIOHandlerSocket, IdIOHandlerStack, IdSSL, IdSSLOpenSSL;
+
+type
+  TReserva = class(TGeral)
+  public
+    procedure pAlimentaPeriodo;
+    procedure pListarFiltroChurrasqueira;
+    procedure pListar;
+    procedure pManipula(paTipo: string);
+    procedure pMarcador(paTipo: Integer);
+    procedure pBuscaFuncionario(paTipo, paParametro: string);
+    procedure pValidaVisualizacaoDeColunaDeUsuario;
+    procedure pPermissaoParaVisualizacaoImpressao;
+    procedure pPermissaoAutorizarReserva;
+    procedure pPermissaoPendenteReserva;
+    procedure pQuantidadeDiasPermitido;
+    procedure pEnviarEmail(paCodigoReserva: Integer);
+    procedure pImprimirTermo;
+    procedure pVerificaChurrasqueira;
+  end;
+
+implementation
+
+uses
+  reservaDmU, reservaFrmU;
+
+{ TReserva }
+
+procedure TReserva.pBuscaFuncionario(paTipo, paParametro: string);
+begin
+
+  with reservaDm.qryBuscaFuncionario do
+  begin
+    Close;
+    ParamByName('TIPO').Value := paTipo;
+    ParamByName('PARAMETRO').Value := paParametro;
+    Open;
+  end;
+
+  with reservaDm do
+  begin
+
+    if qryBuscaFuncionario.IsEmpty then
+      qryManipulaNCODIFUNCI.Value := 0
+    else
+      qryManipulaNCODIFUNCI.Value := qryBuscaFuncionarioNCODIFUNCI.AsInteger;
+
+  end;
+
+end;
+
+procedure TReserva.pEnviarEmail(paCodigoReserva: Integer);
+var
+  AutenticouSMTP: boolean;
+  idSMTP: TIdSMTP;
+  idMESSAGE: TIdMessage;
+  HandlerSSL: TIdSSLIOHandlerSocketOpenSSL;
+
+  procedure piEmailUsuario(paCodigoReserva: Integer);
+  begin
+    with reservaDm, reservaDm.qryEmailUsuario do
+    begin
+      Close;
+      ParamByName('P_COD_RESERVA').Value := paCodigoReserva;
+      Open;
+    end;
+  end;
+
+  function fiCorpoEmail(paCodigoReserva: Integer): string;
+  begin
+    Result := '';
+    with reservaDm, reservaDm.qryCorpoEmail do
+    begin
+      Close;
+      ParamByName('P_COD_RESERVA').Value := paCodigoReserva;
+      Open;
+      Result := qryCorpoEmailRETORNO.Value;
+    end;
+  end;
+
+  function fiEmailAdministradores(): string;
+  begin
+    Result := '';
+    with reservaDm, reservaDm.qryEmailAdministradores do
+    begin
+      Close;
+      Open;
+      Result := qryEmailAdministradoresRETORNO.Value;
+    end;
+  end;
+
+  procedure piConfiguracaoEmail;
+  begin
+    with reservaDm.qryConfigEmail do
+    begin
+      Close;
+      Open;
+    end;
+  end;
+
+begin
+
+  with reservaDm do
+  begin
+    qryStatusEmail.Close;
+    qryStatusEmail.ParamByName('P_COD_RESERVA').AsInteger := paCodigoReserva;
+    qryStatusEmail.Open;
+
+    if qryStatusEmailCSTATRESER.Value <> qryStatusEmailCSEEMRESER.Value then
+    begin
+
+      piConfiguracaoEmail;
+
+      idSMTP := TIdSMTP.Create(nil);
+      HandlerSSL := TIdSSLIOHandlerSocketOpenSSL.Create(nil);
+
+      if idSMTP.Connected then
+      try
+        idSMTP.Disconnect;
+      except
+
+      end;
+
+        //Preparar Mensagem...
+      idMESSAGE := TIdMessage.Create(nil);
+      idMESSAGE.CharSet := 'UFT-8';
+      idMESSAGE.Encoding := meDefault;
+      idMESSAGE.ContentType := 'text/html; charset= utf-8';
+      idMESSAGE.From.Name := 'Associação dos Funcionários da Cooperativa Nova Produtiva';
+      idMESSAGE.From.Address := qryConfigEmailMAIL_FROM.AsString;
+      idMESSAGE.Priority := mpNormal;
+      idMESSAGE.Subject := 'Reserva de Churrasqueira.';
+      idMESSAGE.Date := Now;
+
+       //Add Destinatário(s)
+      idMESSAGE.Recipients.Add;
+
+      piEmailUsuario(paCodigoReserva);
+
+      if qryEmailUsuarioSTATUS.Value <> 'PENDENTE' then
+        idMESSAGE.Recipients.EMailAddresses := qryEmailUsuarioEMAIL.Value
+      else
+        idMESSAGE.Recipients.EMailAddresses := fiEmailAdministradores;
+   // IdMessage.CCList.EMailAddresses := '';
+   // IdMessage.BccList.EMailAddresses := '';
+
+       // corpo
+      idMESSAGE.Body.Clear;
+      idMESSAGE.Body.Add(fiCorpoEmail(paCodigoReserva));
+
+    // autenticacao
+      if qryConfigEmailMAIL_AUTH.Value = 'S' then
+        idSMTP.AuthType := satDefault
+      else
+        idSMTP.AuthType := satNone;
+
+    //conexao segura SSL
+      if qryConfigEmailMAIL_ENABLE_SSL.Value = 'S' then
+      begin
+        HandlerSSL.SSLOptions.Method := sslvSSLv23;
+        HandlerSSL.SSLOptions.Mode := sslmClient;
+        idSMTP.IOHandler := HandlerSSL;
+      end
+      else
+      begin
+        idSMTP.IOHandler := nil;
+      end;
+
+
+    //conexao tls
+      if qryConfigEmailMAIL_SMTP_STARTTLS_ENABLE.Value = 'S' then
+        idSMTP.UseTLS := utUseImplicitTLS
+      else
+        idSMTP.UseTLS := utNoTLSSupport;
+
+      AutenticouSMTP := False;
+
+    //Preparando Servidor...
+      idSMTP.Host := qryConfigEmailMAIL_SERVER_HOST.Value;
+      idSMTP.Port := qryConfigEmailMAIL_SERVER_PORT.AsInteger;
+      idSMTP.Username := qryConfigEmailMAIL_USERNAME.Value;
+      idSMTP.Password := qryConfigEmailMAIL_PASSWORD.Value;
+
+
+       // efetua a conexao ao servidor SMTP
+      if not idSMTP.Connected then
+      //try
+      begin
+        idSMTP.Connect; // conecta ao SMTP
+        AutenticouSMTP := idSMTP.Authenticate // efetua a atenticacao e retorna o resultado para a variável
+      end;
+
+      // se a conexao foi bem sucedida, envia a mensagem
+      if AutenticouSMTP and idSMTP.Connected then
+      begin
+        idSMTP.Send(idMESSAGE);
+        if qryEmailUsuarioSTATUS.Value = 'PENDENTE' then
+          Application.MessageBox('E-mail enviado com sucesso para os Administradores, aguarde a confirmação!', 'Confirmação!', MB_ICONINFORMATION + MB_OK);
+
+        with qryAtualizaStatusEmail do
+        begin
+          Close;
+          ParamByName('P_STATUS').Value := qryEmailUsuarioSTATUS.Value;
+          ParamByName('P_COD_RESERVA').Value := paCodigoReserva;
+          ExecSQL;
+        end;
+
+      end;
+      // depois de tudo pronto, desconecta do servidor SMTP
+      if idSMTP.Connected then
+        idSMTP.Disconnect;
+
+
+    // liberação da DLL
+      UnLoadOpenSSLLibrary;
+    // liberação dos objetos da memória
+      FreeAndNil(idMESSAGE);
+      FreeAndNil(HandlerSSL);
+      FreeAndNil(idSMTP);
+
+    end;
+  end;
+
+end;
+
+procedure TReserva.pImprimirTermo;
+var
+  vLinha: Integer;
+  vPagina: Integer;
+
+  procedure piCabecalho;
+  begin
+    if (vLinha > 80) or (vPagina = 0) then
+    begin
+      vLinha := 1;
+
+      with vPrint do
+      begin
+
+        if vPagina = 0 then
+          vPagina := 1
+        else
+        begin
+          Inc(vPagina);
+          Novapagina;
+        end;
+
+        vLinha := 1;
+
+        Imp(vLinha, 001, 'TERMO....:');
+        ImpF(vLinha, 012, 'REQUISIÇÃO DE UTILIZAÇÃO E AUTORIZAÇÃO DE DESCONTOS NÚMERO ' + reservaDm.qryListaNCODIRESER.AsString, [negrito]);
+        ImpVal(vLinha, 091, 'PAGINA ##0', vPagina, []);
+        Inc(vLinha);
+
+        Imp(vLinha, 001, 'DATA.....:');
+        ImpF(vLinha, 012, DateToStr(Date) + ' - ' + TimeToStr(Time), [negrito]);
+
+        Inc(vLinha);
+
+      end;
+    end
+    else
+      Inc(vLinha);
+  end;
+
+  procedure piListarPertences;
+  begin
+    with reservaDm.qryListaImprimiPertences, reservaDm do
+    begin
+      Close;
+      ParamByName('CODIGO').Value := qryListaNCODICHURR.AsInteger;
+      Open;
+    end;
+  end;
+
+begin
+
+  with reservaDm do
+  begin
+
+    if qryLista.IsEmpty then
+      Abort;
+
+    //01/01/2019
+    if (qryListaQUANTIDADE.Value > 2) then
+      Application.MessageBox('Funcionário já utilizou suas duas(02) Reserva, para essa Reserva será cobrado a Taxa de Limpeza!', 'Atenção!', MB_OK + MB_ICONWARNING);
+
+    vPagina := 0;
+    vLinha := 0;
+
+    pPrint('A', 'R');
+
+    piCabecalho;
+
+    with vPrint do
+    begin
+
+      vPagina := 0;
+
+      piCabecalho;
+      piCabecalho;
+
+      Imp(vLinha, 001, '    Solicito  à  Associação  dos  Funcionários  da  Cooperativa  Nova  Produtiva a  autorização para');
+      piCabecalho;
+      Imp(vLinha, 001, 'utilização  da ' + qryListaCDESCCHURR.AsString + ', no  período de ' + copy(qryListaDINICRESER.AsString, 1, 10) + ' a ' + qryListaDFINARESER.AsString + '. Sendo  que no período em que');
+      piCabecalho;
+      Imp(vLinha, 001, 'estiver de posse da churrasqueira me responsabilizo pelas instalações e pelos  bens móveis que fazem');
+      piCabecalho;
+      Imp(vLinha, 001, 'parte de sua estrutura, conforme relacionados neste documento e conferidos por mim juntamente com um');
+      piCabecalho;
+      Imp(vLinha, 001, 'funcionário da associação.');
+      piCabecalho;
+      Imp(vLinha, 001, '    Consequentemente autorizo o desconto, em minha folha de pagamento, do valor  gerado por qualquer');
+      piCabecalho;
+      Imp(vLinha, 001, 'dano causado à estrutura ou pelo dano, ou extravio de qualquer bem móvel, que por ventura não esteja');
+      piCabecalho;
+      Imp(vLinha, 001, 'em conformidade com o que foi entregue para minha utilização.');
+      piCabecalho;
+
+      Imp(vLinha, 001, fReplicaCaracter('-', 100));
+      piCabecalho;
+
+      Imp(vLinha, 001, 'QTDE. | ITEM DISPONIVEL');
+      Imp(vLinha, 080, '|    CONFERENCIA');
+      piCabecalho;
+
+      Imp(vLinha, 001, fReplicaCaracter('-', 100));
+      piCabecalho;
+
+      piListarPertences;
+
+      while not qryListaImprimiPertences.Eof do
+      begin
+
+        ImpVal(vLinha, 001, '####', qryListaImprimiPertencesNQTDEPECHU.AsInteger, []);
+        Imp(vLinha, 009, qryListaImprimiPertencesCDESCPECHU.AsString);
+        Imp(vLinha, 080, '|');
+        piCabecalho;
+        Imp(vLinha, 001, fReplicaCaracter('-', 100));
+
+        piCabecalho;
+
+        qryListaImprimiPertences.Next;
+      end;
+
+      qryListaImprimiPertences.Close;
+
+      piCabecalho;
+
+      piCabecalho;
+
+      Imp(vLinha, 001, 'NOME DO FUNCIONARIO SOLICITANTE:');
+      ImpF(vLinha, 034, qryListaCNOMEFUNCI.AsString + '.', [negrito]);
+
+      piCabecalho;
+      if (qryListaQUANTIDADE.AsInteger > 2) then
+        Imp(vLinha, 001, 'E autorizo a descontar em folha de pagamento a Taxa de Limpeza no valor de R$ ' + FormatFloat('0.00', qryListaTAXA.AsFloat) + '.');
+      piCabecalho;
+
+      piCabecalho;
+      piCabecalho;
+
+      Imp(vLinha, 001, fReplicaCaracter('_', 40));
+      Imp(vLinha, 053, fReplicaCaracter('_', 48));
+
+      piCabecalho;
+      piCabecalho;
+      piCabecalho;
+      piCabecalho;
+
+      ImpF(vLinha, 007, 'AVISO IMPORTANTE: O FUNCIONÁRIO TEM ATÉ 03 (TRÊS) DIAS ÚTEIS DE ANTECEDÊNCIA PARA DESISTIR', [negrito]);
+      piCabecalho;
+      ImpF(vLinha, 007, 'DA RESERVA DA CHURRASQUEIRA. NÃO HAVENDO A COMUNICAÇÃO DA  DISPENSA, SERÁ COBRADA UMA TAXA', [negrito]);
+      piCabecalho;
+      ImpF(vLinha, 007, 'NO VALOR DE R$ ' + FormatFloat('0.00', qryListaTAXA.AsFloat) + ' (' + qryListaEXTENSO.AsString + '), COM DÉBITO NA FOLHA DE PAGAMENTO DO MESMO.', [negrito]);
+
+    end;
+
+    pPrint('F', '');
+
+  end;
+
+end;
+
+procedure TReserva.pListar;
+var
+  vNome: string;
+  vChurrasqueira: string;
+  vStatus: string;
+  vInicio: string;
+  vFim: string;
+
+  function fiPermissaoUsuario(): Integer;
+  begin
+
+    Result := 0;
+
+    with reservaDm, reservaDm.qryPermissaoUsuario do
+    begin
+      Close;
+      ParamByName('USUARIO').Value := fUsuario;
+      Open;
+
+      if (qryPermissaoUsuarioCADMIUSUAR.Value <> 'S') then
+        if (qryPermissaoUsuarioCPVNRUSUAR.Value <> 'S') then
+          Result := qryPermissaoUsuarioNCODIUSUAR.AsInteger;
+    end;
+  end;
+
+  procedure piPreencherFiltros;
+  begin
+
+    with reservaFrm do
+    begin
+
+      vNome := edt1.Text;
+
+      vInicio := edt2.Text;
+      vFim := edt3.Text;
+
+      if rg1.ItemIndex = 0 then
+        vStatus := 'AUTORIZADO'
+      else if rg1.ItemIndex = 1 then
+        vStatus := 'CANCELADO'
+      else if rg1.ItemIndex = 2 then
+        vStatus := 'PENDENTE'
+      else if rg1.ItemIndex = 3 then
+        vStatus := 'REJEITADO'
+      else if rg1.ItemIndex = 4 then
+        vStatus := 'AUT. E ASSINADO'
+      else if rg1.ItemIndex = 5 then
+        vStatus := 'LIVRE'
+      else
+        vStatus := '%';
+
+    end;
+
+    vChurrasqueira := reservaDm.qryListaFiltroChurrasqueiraCODIGO.AsString;
+
+  end;
+
+begin
+
+  piPreencherFiltros;
+
+  with reservaDm.qryLista do
+  begin
+    Close;
+    ParamByName('NOME').Value := vNome;
+    ParamByName('CHURRASQUEIRA').Value := vChurrasqueira;
+    ParamByName('STATUS').Value := vStatus;
+    ParamByName('INICIO').Value := vInicio;
+    ParamByName('FIM').Value := vFim;
+    if Length(Trim(vNome)) > 0 then
+      ParamByName('USUARIO').Value := fiPermissaoUsuario
+    else
+      ParamByName('USUARIO').Value := 0;
+    Open;
+  end;
+
+end;
+
+procedure TReserva.pManipula(paTipo: string);
+var
+  vCodigo: Integer;
+
+  function fiUsuarioLogado: string;
+  var
+    I: DWord;
+    user: string;
+  begin
+    I := 255;
+    SetLength(user, I);
+    Windows.GetUserName(PChar(user), I);
+    user := string(PChar(user));
+    result := user;
+  end;
+
+  function fiNomeComputador: string;
+  var
+    lpBuffer: PChar;
+    nSize: DWord;
+  const
+    Buff_Size = MAX_COMPUTERNAME_LENGTH + 1;
+  begin
+    nSize := Buff_Size;
+    lpBuffer := StrAlloc(Buff_Size);
+    GetComputerName(lpBuffer, nSize);
+    Result := string(lpBuffer);
+    StrDispose(lpBuffer);
+  end;
+
+  procedure piListaManipulaChurrasqueira;
+  begin
+    with reservaDm.qryListaManipulaChurrasqueira do
+    begin
+      Close;
+      Open;
+    end;
+  end;
+
+  procedure piListaManipulaFuncionario;
+  begin
+    with reservaDm.qryBuscaFuncionario do
+    begin
+      Close;
+      Open;
+    end;
+  end;
+
+  procedure piBuscarRegistro;
+  begin
+
+    with reservaDm do
+    begin
+
+      if paTipo = 'novo' then
+        vCodigo := 0
+      else if qryLista.IsEmpty then
+        Abort
+      else
+        vCodigo := qryListaNCODIRESER.AsInteger;
+
+      with qryManipula do
+      begin
+        Close;
+        ParamByName('CODIGO').Value := vCodigo;
+        Open;
+      end;
+
+    end;
+
+  end;
+
+  procedure piPermissaoUsuario;
+  begin
+    with reservaDm.qryPermissaoUsuario do
+    begin
+      Close;
+      ParamByName('USUARIO').Value := fUsuario;
+      Open;
+    end;
+
+    with reservaFrm do
+    begin
+      if (reservaDm.qryPermissaoUsuarioCADMIUSUAR.Value = 'S') or (reservaDm.qryPermissaoUsuarioCPMRCUSUAR.Value = 'S') then
+      begin
+        btn2.Enabled := True;
+        btn3.Enabled := True;
+        btn4.Enabled := True;
+        btn5.Enabled := True;
+      end
+      else
+      begin
+        btn2.Enabled := False;
+        btn3.Enabled := False;
+        btn4.Enabled := False;
+        btn5.Enabled := False;
+      end;
+    end;
+
+  end;
+
+  function fiPermiteFazerReservaNoPeriodo: string;
+  begin
+
+    with reservaDm.qryPermiteFazerReservaNoPeriodo, reservaDm do
+    begin
+      Close;
+      ParamByName('INICIO').Value := qryManipulaDINICRESER.AsString;
+      ParamByName('FIM').Value := qryManipulaDFINARESER.AsString;
+      ParamByName('RESERVA').Value := qryManipulaNCODIRESER.AsInteger;
+      ParamByName('CHURRASQUEIRA').Value := qryManipulaNCODICHURR.AsInteger;
+      Open;
+      Result := qryPermiteFazerReservaNoPeriodoRESULTADO.AsString;
+      Close;
+    end;
+
+  end;
+
+  function fiUsuario(): Integer;
+  begin
+    Result := 0;
+    with reservaDm, reservaDm.qryPermissaoUsuario do
+    begin
+      Close;
+      ParamByName('USUARIO').Value := fUsuario;
+      Open;
+
+      Result := qryPermissaoUsuarioNCODIUSUAR.AsInteger;
+    end;
+  end;
+
+  function fiEmailUsuario(): string;
+  begin
+    Result := '';
+    with reservaDm, reservaDm.qryPermissaoUsuario do
+    begin
+      Close;
+      ParamByName('USUARIO').Value := fUsuario;
+      Open;
+      Result := qryPermissaoUsuarioCEMAIUSUAR.Value;
+    end;
+  end;
+
+begin
+
+  with reservaFrm, reservaDm do
+  begin
+    pnl1.SetFocus;
+
+    if paTipo = 'novo' then
+    begin
+
+      if Length(Trim(fiEmailUsuario)) <= 0 then
+      begin
+        Application.MessageBox('Atenção para cadastrar uma Reserva é necessário o cadastro completo do Usuário!', 'Atenção!', MB_OK + MB_ICONWARNING);
+        Abort;
+      end;
+
+      piListaManipulaChurrasqueira;
+      piListaManipulaFuncionario;
+
+      piBuscarRegistro;
+
+      qryManipula.Insert;
+      qryManipulaNCODIRESER.Value := 0;
+      qryManipulaCSTATRESER.Value := 'PENDENTE';
+      qryManipulaNCODICHURR.Value := 0;
+      qryManipulaNCODIFUNCI.Value := 0;
+
+      piPermissaoUsuario;
+      qryManipulaNCODIUSUAR.Value := qryPermissaoUsuarioNCODIUSUAR.AsInteger;
+
+      pBuscaFuncionario('0', '0');
+
+      edt4.Clear;
+
+    end;
+
+    if paTipo = 'excluir' then
+    begin
+
+      if qryListaCSTATRESER.Value <> 'PENDENTE' then
+        Abort;
+
+      piPermissaoUsuario;
+
+      if qryPermissaoUsuarioCADMIUSUAR.Value = 'N' then
+        if qryPermissaoUsuarioCPMRCUSUAR.Value = 'N' then
+          if qryManipulaNCODIUSUAR.Value <> qryPermissaoUsuarioNCODIUSUAR.AsInteger then
+          begin
+            Application.MessageBox('Usuário não possui permissão para excluir registro!', 'Atenção!', MB_OK + MB_ICONWARNING);
+            Abort;
+          end;
+
+      pExcluirRegistro('ASSRESER', qryListaNCODIRESER.AsString, 'N');
+
+      pListar;
+
+    end;
+
+    if paTipo = 'editar' then
+    begin
+
+      piListaManipulaChurrasqueira;
+      piListaManipulaFuncionario;
+
+      piBuscarRegistro;
+
+      if vCodigo <> 0 then
+        qryManipula.Edit
+      else
+      begin
+        qryManipula.Insert;
+        qryManipulaDINICRESER.Value := qryListaDFINARESER.Value;
+        qryManipulaNCODIRESER.Value := 0;
+        qryManipulaCSTATRESER.Value := 'PENDENTE';
+        qryManipulaNCODICHURR.Value := 0;
+        qryManipulaNCODIFUNCI.Value := 0;
+
+        piPermissaoUsuario;
+        qryManipulaNCODIUSUAR.Value := qryPermissaoUsuarioNCODIUSUAR.AsInteger;
+      end;
+
+      pBuscaFuncionario('CODIGO', qryManipulaNCODIFUNCI.AsString);
+
+      edt4.Text := qryBuscaFuncionarioCCRACFUNCI.AsString;
+
+    end;
+
+    if paTipo = 'salvar' then
+    begin
+
+      pValidaCampos(reservaFrm, grp3);
+      pValidaCampos(reservaFrm, grp6);
+      pValidaCampos(reservaFrm, grp7);
+      pValidaCampos(reservaFrm, grp8);
+
+      pVerificaChurrasqueira;
+
+      if qryBuscaFuncionario.IsEmpty then
+      begin
+
+        Application.MessageBox('Preencha o campo "Cracha"!', 'Atencao!', MB_OK + MB_ICONWARNING);
+        edt4.SetFocus;
+        Abort;
+
+      end;
+
+      if qryManipula.State in [dsEdit] then
+      begin
+        if qryPermissaoUsuarioCADMIUSUAR.Value = 'N' then
+          if (qryManipulaCSTATRESER.Value <> 'PENDENTE') and (qryManipulaNCODIUSUAR.Value <> qryPermissaoUsuarioNCODIUSUAR.AsInteger) then
+          begin
+            Application.MessageBox('Usuario não pode editar a reserva de outro usuario"!', 'Atencao!', MB_OK + MB_ICONWARNING);
+            Abort;
+          end;
+      end;
+
+      if (fiPermiteFazerReservaNoPeriodo = 'N') and ((qryManipulaCSTATRESER.Value <> 'CANCELADO') or (qryManipulaCSTATRESER.Value <> 'REJEITADO')) then
+      begin
+
+        Application.MessageBox('Nao é possivel fazer reserva neste periodo pois ja esta sendo utilizado!', 'Atencao!', MB_OK + MB_ICONWARNING);
+        DBEdit2.SetFocus;
+        Abort;
+
+      end;
+
+      if (qryManipulaCSTATRESER.Value = 'PENDENTE') or (qryManipulaCSTATRESER.Value = 'AUT. E ASSINADO') or (qryManipulaCSTATRESER.AsString = 'AUTORIZADO') then
+      begin
+        pQuantidadeDiasPermitido;
+        pPermissaoPendenteReserva;
+        pPermissaoAutorizarReserva;
+      end;
+
+      try
+        //insere o nome do usuario logado e computador
+        qryManipulaCTERURESER.AsString := fiUsuarioLogado + ' - ' + fiNomeComputador + ' - ' + IdIPWatch.LocalIP;
+
+        pIniciaTransacao;
+
+        if qryManipula.State in [dsInsert] then
+          vCodigo := fCodigo('ASS_SASSRESER')
+        else
+          vCodigo := qryManipulaNCODIRESER.Value;
+
+        //25/05/2019
+        qryManipulaNUSUARESER.AsInteger := fiUsuario();
+
+        qryManipulaNCODIRESER.Value := vCodigo;
+        qryManipula.Post;
+
+        Update;
+
+        //01/01/2019
+        qryValidaTaxa.Close;
+        qryValidaTaxa.ParamByName('P_RESERVA').AsInteger := qryManipulaNCODIRESER.AsInteger;
+        qryValidaTaxa.ParamByName('P_FUNCIONARIO').AsInteger := qryManipulaNCODIFUNCI.AsInteger;
+        qryValidaTaxa.Open;
+
+        if ((qryValidaTaxaRETORNO.Value > 2) and (qryManipulaCSTATRESER.Value = 'PENDENTE')) then
+          if Application.MessageBox('Funcionário já utilizou suas duas(02) Reserva para essa Reserva será cobrado a Taxa de Limpeza, Deseja Realmente fazer a Reserva?', 'Atenção!', MB_YESNO + MB_ICONWARNING) = IDNO then
+            raise Exception.Create('Reserva abortada');
+
+        //25/05/2019
+        if (qryValidaTaxaRETORNO.Value > 2) then
+        begin
+          if ((qryManipulaCSTATRESER.Value = 'AUT. E ASSINADO') or (qryManipulaCSTATRESER.Value = 'AUTORIZADO')) then
+          begin
+            if Application.MessageBox('Funcionário já utilizou suas duas(02) Reserva para essa Reserva será cobrado a Taxa de Limpeza, Deseja Realmente autorizar a Reserva?', 'Atenção!', MB_YESNO + MB_ICONWARNING) = IDNO then
+              raise Exception.Create('Reserva abortada');
+          end;
+        end;
+
+        qryManipula.Close;
+        qryListaManipulaChurrasqueira.Close;
+        qryBuscaFuncionario.Close;
+
+        pAplicaTransacao;
+
+        pListar;
+
+        qryLista.Locate('NCODIRESER', vCodigo, []);
+
+        pEnviarEmail(vCodigo);
+
+        qryPermissaoUsuario.Close;
+
+      except
+        on E: Exception do
+        begin
+          pCancelaTransacao;
+          qryPermissaoUsuario.Close;
+          Application.MessageBox(PChar('Erro: ' + E.Message), 'Atenção!', MB_OK + MB_ICONERROR);
+        end;
+
+      end;
+
+    end;
+
+    if paTipo = 'cancelar' then
+    begin
+
+      qryManipula.Cancel;
+      qryManipula.Close;
+      qryListaManipulaChurrasqueira.Close;
+      qryBuscaFuncionario.Close;
+      qryPermissaoUsuario.Close;
+
+    end;
+
+    if (paTipo = 'novo') or (paTipo = 'editar') then
+    begin
+      pControlaBotoes('A', reservaFrm, pnl1, pgc1, grp3);
+      piPermissaoUsuario;
+    end
+    else
+      pControlaBotoes('B', reservaFrm, pnl1, pgc1, grp3);
+
+  end;
+
+end;
+
+procedure TReserva.pMarcador(paTipo: Integer);
+begin
+
+  with reservaDm.qryManipula do
+  begin
+
+    if paTipo = 1 then
+      FieldByName('CSTATRESER').Value := 'AUTORIZADO';
+
+    if paTipo = 2 then
+      FieldByName('CSTATRESER').Value := 'REJEITADO';
+
+    if paTipo = 3 then
+      FieldByName('CSTATRESER').Value := 'CANCELADO';
+
+    if paTipo = 4 then
+      FieldByName('CSTATRESER').Value := 'AUT. E ASSINADO';
+
+  end;
+
+end;
+
+procedure TReserva.pPermissaoAutorizarReserva;
+
+  function fiIDUsuario(): Integer;
+  begin
+    Result := 0;
+    with reservaDm, reservaDm.qryPermissaoUsuario do
+    begin
+      Close;
+      ParamByName('USUARIO').Value := fUsuario;
+      Open;
+      Result := qryPermissaoUsuarioNCODIUSUAR.AsInteger;
+    end;
+  end;
+
+begin
+  with reservaDm, reservaDm.qryPermissaoAutorizarReserva do
+  begin
+    Close;
+    ParamByName('P_COD_RESERVA').Value := qryManipulaNCODIRESER.Value;
+    ParamByName('P_FUNCIONARIO').Value := qryManipulaNCODIFUNCI.Value;
+    ParamByName('P_USUARIO').Value := fiIDUsuario;
+    ParamByName('P_DT_RESERVA').Value := qryManipulaDINICRESER.Value;
+    Open;
+
+    if qryPermissaoAutorizarReservaRETORNO.AsString = 'N' then
+    begin
+      Application.MessageBox('Atenção o funcionário já utilizou todas as suas reserva mensal!', 'Atenção!', MB_OK + MB_ICONWARNING);
+      Abort;
+    end;
+  end;
+end;
+
+procedure TReserva.pPermissaoParaVisualizacaoImpressao;
+
+  procedure piPermissaoUsuario;
+  begin
+    with reservaDm.qryPermissaoUsuario do
+    begin
+      Close;
+      ParamByName('USUARIO').Value := fUsuario;
+      Open;
+    end;
+
+    with reservaDm do
+    begin
+      if (qryPermissaoUsuarioCADMIUSUAR.Value <> 'S') then
+        if (qryPermissaoUsuarioCPVNRUSUAR.Value <> 'S') then
+          if (qryPermissaoUsuarioNCODIUSUAR.AsInteger <> qryListaNCODIUSUAR.AsInteger) then
+          begin
+            Application.MessageBox('Atenção usuário sem permissão para visualização/impressão!', 'Atenção!', MB_OK + MB_ICONWARNING);
+            Abort;
+          end;
+    end;
+
+  end;
+
+begin
+  piPermissaoUsuario;
+end;
+
+procedure TReserva.pPermissaoPendenteReserva;
+
+  function fiIDUsuario(): Integer;
+  begin
+    Result := 0;
+    with reservaDm, reservaDm.qryPermissaoUsuario do
+    begin
+      Close;
+      ParamByName('USUARIO').Value := fUsuario;
+      Open;
+      Result := qryPermissaoUsuarioNCODIUSUAR.AsInteger;
+    end;
+  end;
+
+begin
+  with reservaDm, reservaDm.qryPermissaoPendenteReserva do
+  begin
+    Close;
+    ParamByName('P_COD_RESERVA').Value := qryManipulaNCODIRESER.Value;
+    ParamByName('P_FUNCIONARIO').Value := qryManipulaNCODIFUNCI.Value;
+    ParamByName('P_USUARIO').Value := fiIDUsuario;
+    Open;
+
+    if qryPermissaoPendenteReservaRETORNO.AsString = 'N' then
+    begin
+      Application.MessageBox('Atenção o funcionário não pode mais fazer reserva(Pendente), autorize ou cancele sua reserva Pendente!', 'Atenção!', MB_OK + MB_ICONWARNING);
+      Abort;
+    end;
+  end;
+
+end;
+
+procedure TReserva.pQuantidadeDiasPermitido;
+
+  function fiIDUsuario(): Integer;
+  begin
+    Result := 0;
+    with reservaDm, reservaDm.qryPermissaoUsuario do
+    begin
+      Close;
+      ParamByName('USUARIO').Value := fUsuario;
+      Open;
+      Result := qryPermissaoUsuarioNCODIUSUAR.AsInteger;
+    end;
+  end;
+
+begin
+  with reservaDm, reservaDm.qryQuantidadeMaximaDias do
+  begin
+    Close;
+    ParamByName('P_USUARIO').Value := fiIDUsuario;
+    ParamByName('P_DT_RESERVA').Value := qryManipulaDINICRESER.Value;
+    Open;
+
+    if qryQuantidadeMaximaDiasRETORNO.AsString = 'N' then
+    begin
+      Application.MessageBox('Atenção não é permitido agendar a churrasqueira com a data informada, ela ultrapassa o limite permitido!', 'Atenção!', MB_OK + MB_ICONWARNING);
+      Abort;
+    end;
+  end;
+end;
+
+procedure TReserva.pValidaVisualizacaoDeColunaDeUsuario;
+begin
+
+  with reservaDm.qryPermissaoUsuario, reservaDm do
+  begin
+
+    Close;
+    ParamByName('USUARIO').Value := fUsuario;
+    Open;
+
+    if (qryPermissaoUsuarioCADMIUSUAR.Value = 'S') or (qryPermissaoUsuarioCPVNRUSUAR.Value = 'S') then
+    begin
+      reservaFrm.Lista1.Columns.Items[0].Visible := True;
+      reservaFrm.Lista1.Columns.Items[3].Visible := True;
+      reservaFrm.Lista1.Columns.Items[5].Visible := True;
+    end
+    else
+    begin
+      reservaFrm.Lista1.Columns.Items[0].Visible := False;
+      reservaFrm.Lista1.Columns.Items[3].Visible := False;
+      reservaFrm.Lista1.Columns.Items[5].Visible := True;
+    end;
+
+    Close;
+
+  end;
+
+end;
+
+procedure TReserva.pVerificaChurrasqueira;
+begin
+  with reservaDm, reservaDm.qryVerificaChurrasqueira do
+  begin
+    Close;
+    ParamByName('P_NCODICHURR').Value := qryManipulaNCODICHURR.Value;
+    Open;
+
+    if qryVerificaChurrasqueiraRETORNO.Value <= 0 then
+    begin
+      Application.MessageBox('Atenção não é permitido agendar a churrasqueira Inativa!', 'Atenção!', MB_OK + MB_ICONWARNING);
+      Abort;
+    end;
+  end;
+
+  with reservaDm, reservaDm.qryVerificaDiaChurrasqueria do
+  begin
+    Close;
+    ParamByName('P_COD_CHURRASQUEIRA').Value := qryManipulaNCODICHURR.Value;
+    ParamByName('P_DT_RESERVA').Value := qryManipulaDINICRESER.Value;
+    ParamByName('P_COD_RESERVA').Value := qryManipulaNCODIRESER.Value;
+    Open;
+
+    if qryVerificaDiaChurrasqueriaRETORNO.Value = 'N' then
+    begin
+      Application.MessageBox('Atenção não é permitido agendar a churrasqueira nessa data!', 'Atenção!', MB_OK + MB_ICONWARNING);
+      Abort;
+    end;
+  end;
+end;
+
+procedure TReserva.pAlimentaPeriodo;
+begin
+
+  with reservaFrm do
+  begin
+//    edt2.Text := DateToStr(StartOfTheMonth(now));
+//    edt3.Text := DateToStr(EndOfTheMonth(now));
+
+    edt2.Date := StartOfTheMonth(now);
+    edt3.Date := EndOfTheMonth(now);
+  end;
+end;
+
+procedure TReserva.pListarFiltroChurrasqueira;
+begin
+
+  with reservaDm.qryListaFiltroChurrasqueira do
+  begin
+    Close;
+    Open;
+  end;
+
+end;
+
+end.
+

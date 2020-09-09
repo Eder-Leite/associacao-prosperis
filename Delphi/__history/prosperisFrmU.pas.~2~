@@ -1,0 +1,195 @@
+unit prosperisFrmU;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  Dialogs, Buttons, ExtCtrls, pngimage, DB, DBAccess, Ora, StdCtrls, geralU,
+  OraCall, MemDS, DASQLMonitor, OraSQLMonitor;
+
+type
+  TprosperisFrm = class(TForm)
+    pnl1: TPanel;
+    pnl2: TPanel;
+    btnFinanceiro: TSpeedButton;
+    btnSeguranca: TSpeedButton;
+    btnSair: TSpeedButton;
+    pnl3: TPanel;
+    img1: TImage;
+    session: TOraSession;
+    lbl1: TLabel;
+    btnAssociacao: TSpeedButton;
+    qryVersao: TOraQuery;
+    qryVersaoCVERSCONFG: TStringField;
+    OraSQLMonitor: TOraSQLMonitor;
+    procedure btnSairClick(Sender: TObject);
+    procedure btnFinanceiroClick(Sender: TObject);
+    procedure btnSegurancaClick(Sender: TObject);
+    procedure FormCreate(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
+    procedure btnAssociacaoClick(Sender: TObject);
+    procedure FormShow(Sender: TObject);
+  private
+    { Private declarations }
+  public
+    { Public declarations }
+    grl: TGeral;
+    procedure SaveEmailDll;
+    procedure pVerificaVersao;
+  end;
+
+const
+     //afnporc11g
+    //servidor 10.0.1.9:1521:NOVA
+   //versao do sistema 1.0 24/07/2013
+  //versao do sistema 2.0 01/06/2017
+  //versao do sistema 2.1 14/08/2017
+ //versao do sistema 2.2 26/03/2018
+ //versao do sistema 2.3 01/01/2019
+//versao do sistema 2.4 25/05/2019
+  cVersao: string = '2.4';
+
+var
+  prosperisFrm: TprosperisFrm;
+
+implementation
+
+uses
+  financeiroFrmU, segurancaFrmU, loginFrmU, associacaoFrmU;
+
+{$R *.dfm}
+{$R email.RES}
+
+procedure TprosperisFrm.btnAssociacaoClick(Sender: TObject);
+begin
+
+  if grl.fPermissao('S', 'ASSOCIACAO') = False then
+    Abort;
+
+  if associacaoFrm = nil then
+  begin
+    associacaoFrm := TassociacaoFrm.Create(prosperisFrm);
+    associacaoFrm.Show;
+  end
+  else
+  begin
+    if associacaoFrm.Showing = False then
+      associacaoFrm.Show;
+
+    associacaoFrm.WindowState := wsNormal;
+  end;
+
+end;
+
+procedure TprosperisFrm.btnFinanceiroClick(Sender: TObject);
+begin
+
+  if grl.fPermissao('S', 'FINANCEIRO') = False then
+    Abort;
+
+  if financeiroFrm = nil then
+  begin
+    financeiroFrm := TfinanceiroFrm.Create(prosperisFrm);
+    financeiroFrm.Show;
+  end
+  else
+  begin
+    if financeiroFrm.Showing = False then
+      financeiroFrm.Show;
+
+    financeiroFrm.WindowState := wsNormal;
+  end;
+
+end;
+
+procedure TprosperisFrm.btnSairClick(Sender: TObject);
+begin
+  Application.Terminate;
+end;
+
+procedure TprosperisFrm.btnSegurancaClick(Sender: TObject);
+begin
+
+  if grl.fPermissao('S', 'FINANCEIRO') = False then
+    Abort;
+
+  if segurancaFrm = nil then
+  begin
+    segurancaFrm := TsegurancaFrm.Create(prosperisFrm);
+    segurancaFrm.Show;
+  end
+  else
+  begin
+    if segurancaFrm.Showing = False then
+      segurancaFrm.Show;
+
+    segurancaFrm.WindowState := wsNormal;
+  end;
+
+end;
+
+procedure TprosperisFrm.FormCreate(Sender: TObject);
+begin
+// pVerificaVersao;
+
+  Application.CreateForm(TloginFrm, loginFrm);
+  loginFrm.ShowModal;
+  loginFrm.Free;
+
+  grl := TGeral.Create;
+end;
+
+procedure TprosperisFrm.FormDestroy(Sender: TObject);
+begin
+  FreeAndNil(grl);
+end;
+
+procedure TprosperisFrm.FormShow(Sender: TObject);
+begin
+  SaveEmailDll;
+end;
+
+procedure TprosperisFrm.pVerificaVersao;
+begin
+  qryVersao.Close;
+  qryVersao.Open;
+
+  if cVersao <> qryVersaoCVERSCONFG.AsString then
+  begin
+    Application.MessageBox('Atenção seu executavel está desatualizado, para atualizar(Config.ini update) entre em contato com DTI!', 'Atenção!', MB_OK + MB_ICONINFORMATION);
+    Application.Terminate;
+  end;
+
+end;
+
+procedure TprosperisFrm.SaveEmailDll;
+var
+  PathToSave: string;
+  Res: TResourceStream;
+begin
+  PathToSave := ExtractFilePath(Application.ExeName) + '\libeay32.dll';
+  if not FileExists(PathToSave) then
+  begin
+    Res := TResourceStream.Create(Hinstance, 'libeay32dll', 'dllfile');
+    try
+      Res.SavetoFile(PathToSave);
+    finally
+      Res.Free;
+    end;
+  end;
+
+  PathToSave := ExtractFilePath(Application.ExeName) + '\ssleay32.dll';
+  if not FileExists(PathToSave) then
+  begin
+    Res := TResourceStream.Create(Hinstance, 'ssleay32dll', 'dllfile');
+    try
+      Res.SavetoFile(PathToSave);
+    finally
+      Res.Free;
+    end;
+  end;
+
+end;
+
+end.
+

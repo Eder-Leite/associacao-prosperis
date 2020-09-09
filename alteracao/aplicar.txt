@@ -1,0 +1,49 @@
+ALTER TABLE ASSCHURR ADD CSTATCHURR VARCHAR2(1) DEFAULT 'A' NOT NULL;
+ALTER TABLE ASSCHURR ADD NVLTXCHURR NUMBER(7,2) DEFAULT 0 NOT NULL;
+
+COMMENT ON COLUMN ASSCHURR.CSTATCHURR
+  IS 'Status da churrasqueira A para Ativa e I para Inativa';
+COMMENT ON COLUMN ASSCHURR.NVLTXCHURR
+  IS 'Valor de taxa de uso';
+
+-------------------------------------------------------------------------------------------------------
+
+ALTER TABLE ASSRESER ADD CSEEMRESER VARCHAR2(20);
+ALTER TABLE ASSRESER ADD CTERURESER VARCHAR2(500);
+
+COMMENT ON COLUMN ASSRESER.CSEEMRESER
+  IS 'Status do envio de email das reserva';
+COMMENT ON COLUMN ASSRESER.CTERURESER
+  IS 'Terminal utilizado';
+----------------------------------------------------------------------------------------------------------  
+
+ALTER TABLE SEGUSUAR ADD NQPPRUSUAR NUMBER(2) DEFAULT 3 NOT NULL;
+ALTER TABLE SEGUSUAR ADD NQPARUSUAR NUMBER(2) DEFAULT 3 NOT NULL;
+ALTER TABLE SEGUSUAR ADD NQPDRUSUAR NUMBER(3) DEFAULT 180 NOT NULL;
+
+
+COMMENT ON COLUMN SEGUSUAR.NQPPRUSUAR
+  IS 'Quantidade permitida de status pendente para reserva de churrasqueira geral';
+COMMENT ON COLUMN SEGUSUAR.NQPARUSUAR
+  IS 'Quantidade permitida de status autorizada para reserva de churrasqueira por mes';
+COMMENT ON COLUMN SEGUSUAR.NQPDRUSUAR
+  IS 'Quantidade maxima de intervalo de dias permitido para reserva de churrasqueira';
+  
+  
+---------------------------------------------------------------------------------------------------------  
+
+
+-- CREATE TABLE
+CREATE TABLE SEGCONFG
+(
+  CVERSCONFG VARCHAR2(10)
+
+);
+-- ADD COMMENTS TO THE TABLE 
+COMMENT ON TABLE SEGCONFG
+  IS 'Configuração sistema';
+-- ADD COMMENTS TO THE COLUMNS 
+COMMENT ON COLUMN SEGCONFG.CVERSCONFG
+  IS 'versão do sistema';
+  
+---------------------------------------------------------------------------------------------------------   
